@@ -31,6 +31,7 @@ Our ultimate goal is to make logrotate to create log files that is accessble to 
         [ ! -f /run/nginx.pid ] || kill -USR1 `cat /run/nginx.pid` # make sure this is your pid route for nginx
       endscript
     }
+    
     ```
 ## 2. Make logs accessble 
 
