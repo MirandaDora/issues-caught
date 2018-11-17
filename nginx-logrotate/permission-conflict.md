@@ -32,8 +32,7 @@ Our ultimate goal is to make logrotate to create log files that is accessble to 
       endscript
     }
     
-    ```
-    ```
+   ```
 ## 2. Make logs accessble 
 
   when you do `sudo service nginx start`, the log files are created by root( or the user you ssh'ed in ). 
