@@ -1,0 +1,240 @@
+# in order to create an auto scaled ecs and task definition, the following resources needs to be created (in order):
+# ecr as docker image (manual)
+# push docker to ecr and get the image ready to go
+# event rule: -- when does the autoscale happens
+# ecs cluster
+# ecs task definition (need ecr)
+# ecs service (depends: ecs task definition)
+# autoscale target(depends: ecs service)
+# autoscale policy(depends: ecs service, target)
+# alarm based on the event: -- a bridge to trigger autoscale (depends: autoscale policy, ecs service)
+
+
+service: ctp-monitoring # NOTE: update this with your service name
+provider:
+  name: aws
+  stage: ${env:STAGE}
+  region: us-west-2
+  runtime: nodejs8.10
+  environment:
+    MONGO_DB: ${env:MONGO_DB}
+    TELEMETRY_DYNAMODB_TABLE: ${env:TELEMETRY_DYNAMODB_TABLE}
+    NODE_ENV: ${env:STAGE}
+  apiKeys:
+    - ${self:service}-${self:provider.stage}-manual-testing
+    - ${self:service}-${self:provider.stage}-live
+plugins:
+  - serverless-offline
+  - serverless-dotenv-plugin
+  - serverless-offline-scheduler
+custom:
+  cloudwatchLogGroupName: "/ecs/ctp-diagnostic-sync-fargate-task-log-${self:provider.stage}"
+  serviceSubnet: ${env:SUBNET}
+  securityGroup: ${env:SECURITY_GROUP}
+  serverless-offline:
+    port: 4000
+resources:
+  Resources:
+    CTPMonitoringServiceECSCluster:
+      Type: AWS::ECS::Cluster
+      Properties:
+        ClusterName: "${self:service}-ecs-cluster-${self:provider.stage}"
+    MonitoringRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: ${self:service}-ecs-role-${self:provider.stage}
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service:
+                  - lambda.amazonaws.com
+                  - ecs-tasks.amazonaws.com
+                  - application-autoscaling.amazonaws.com
+              Action: sts:AssumeRole
+        Policies:
+          - PolicyName: ${self:service}-cloudwatch-policy-${self:provider.stage}
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - logs:CreateLogGroup
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                    - logs:DescribeLogGroups
+                    - logs:DescribeLogStreams
+                  Resource:
+                    - arn:aws:logs:${self:provider.region}:${env:ACCOUNT_ID}:log-group:*:*:*
+          - PolicyName: "${self:service}-dynamodb-policy-${self:provider.stage}"
+            PolicyDocument:
+              Version: '2012-10-17'
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - dynamodb:*
+                  Resource: 
+                    - "arn:aws:dynamodb:${self:provider.region}:${env:ACCOUNT_ID}:table/${env:TELEMETRY_DYNAMODB_TABLE}"
+          - PolicyName: ${self:service}-ecr-policy-${self:provider.stage}
+            PolicyDocument:
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - ecr:*
+                  Resource:
+                    - "*"
+          - PolicyName: ${self:service}-ecs-policy-${self:provider.stage}
+            PolicyDocument:
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - ecs:*
+                    - application-autoscaling:*
+                    - cloudwatch:DescribeAlarms
+                    - cloudwatch:PutMetricAlarm
+                  Resource:
+                    - "*"
+    CTPDataServiceCheckTaskDefinition:
+      Type: AWS::ECS::TaskDefinition
+      Properties: 
+        ExecutionRoleArn: 
+          Ref: MonitoringRole
+        Memory: "3072"
+        Cpu: "1024"
+        Family: "ctp-data-service-check-task-definition"
+        NetworkMode: awsvpc
+        RequiresCompatibilities: ["FARGATE"]
+        TaskRoleArn: 
+          Ref: MonitoringRole
+        ContainerDefinitions:
+          - EntryPoint: ["node", "data-service-check/data-service-check-handler.js"]
+            Environment:
+              - Name: "NODE_ENV"
+                Value: "${self:provider.stage}"
+              - Name: "MONGO_DB"
+                Value: "${env:MONGO_DB}"
+              - Name: "TELEMETRY_DYNAMODB_TABLE"
+                Value: "${env:TELEMETRY_DYNAMODB_TABLE}"
+              - Name: "CTP_MONITORING_ECS_CLUSTER_NAME"
+                Value: "${self:service}-ecs-cluster-${self:provider.stage}"
+              - Name: "CTP_MONITORING_DATA_SERVICE_CHECK_ECS_SERVICE_NAME"
+                Value: "${self:service}-data-service-check-ecs-service-${self:provider.stage}"
+              - Name: "DATA_SERVICE_CHECK_DIAGNOSTIC_THRESHOLD_DAYS"
+                Value: ${env:DIAGNOSTIC_THRESHOLD_DAYS}
+              - Name: "DATA_SERVICE_CHECK_THROTTLE_TIME_IN_MS"
+                Value: ${env:DATA_SERVICE_CHECK_THROTTLE_TIME_IN_MS}
+              - Name: "CTP_VEHICLE_XAPIKEY"
+                Value: ${env:CTP_VEHICLE_XAPIKEY}
+            Essential: true
+            Image: "${env:CTP_MONITORING_DATA_SERVICE_CHECK_ECR_URI}:1"
+            Name: "ctp-data-service-check"
+            LogConfiguration: 
+              LogDriver: awslogs
+              Options: 
+                awslogs-group: "${self:custom.cloudwatchLogGroupName}"
+                awslogs-region: "us-west-2"
+                awslogs-stream-prefix: "ecs"          
+    CloudWatchLogsGroup:
+      Type: AWS::Logs::LogGroup
+      Properties:
+        LogGroupName: "${self:custom.cloudwatchLogGroupName}"
+        RetentionInDays: 3
+    CTPDataServiceCheckECSService:
+      Type: AWS::ECS::Service
+      Properties:
+        Cluster: 
+          Ref: CTPMonitoringServiceECSCluster
+        DeploymentConfiguration:
+          MaximumPercent: 100
+          MinimumHealthyPercent: 0
+        DesiredCount: 0
+        LaunchType: FARGATE
+        NetworkConfiguration: 
+          AwsvpcConfiguration:
+            Subnets: ["${self:custom.serviceSubnet}"]
+            SecurityGroups: ["${self:custom.securityGroup}"]
+            AssignPublicIp: "ENABLED"
+        ServiceName: "${self:service}-data-service-check-ecs-service-${self:provider.stage}"
+        TaskDefinition: 
+          Ref: CTPDataServiceCheckTaskDefinition
+    DataServiceServiceScaleOutPolicy:
+      Type: AWS::ApplicationAutoScaling::ScalingPolicy
+      Properties:
+        PolicyName: ScaleOutPolicy
+        PolicyType: StepScaling
+        ScalingTargetId: 
+          Ref: CTPDataServiceCheckScalingTarget
+        StepScalingPolicyConfiguration:
+          AdjustmentType: ChangeInCapacity
+          Cooldown: 60
+          MetricAggregationType: Average
+          StepAdjustments:
+            - ScalingAdjustment: 1
+              MetricIntervalLowerBound: 0
+    DataServiceCheckScaleOutAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        EvaluationPeriods: 2
+        Statistic: Average
+        TreatMissingData: notBreaching
+        Threshold: 1
+        AlarmDescription: Trigger data service check
+        Period: 60
+        AlarmActions:
+          - Ref: DataServiceServiceScaleOutPolicy
+        Namespace: AWS/Events
+        Dimensions:
+          - Name: RuleName
+            Value: 
+              Ref: DataServiceCheckAutoScaleOutEventRule
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        MetricName: TriggeredRules
+      DependsOn:
+        - CTPDataServiceCheckECSService
+        - DataServiceServiceScaleOutPolicy
+    DataServiceCheckAutoScaleOutEventRule:
+      Type: AWS::Events::Rule
+      Properties: 
+        Description: "ctp-data-service-check service scales up every day 6 UTC time"
+        Name: "ctp-data-service-check-scale-up-event-${self:provider.stage}"
+        ScheduleExpression: cron(0 6 * * ? *)
+        State: "ENABLED"
+    CTPDataServiceCheckScalingTarget:
+      Type: AWS::ApplicationAutoScaling::ScalableTarget
+      Properties:
+        MinCapacity: 0
+        MaxCapacity: 1
+        ResourceId: "service/${self:service}-ecs-cluster-${self:provider.stage}/${self:service}-data-service-check-ecs-service-${self:provider.stage}"
+        RoleARN: 
+          Fn::GetAtt: [ MonitoringRole, Arn ]
+        ScalableDimension: ecs:service:DesiredCount
+        ServiceNamespace: ecs
+      DependsOn:
+        - CTPDataServiceCheckECSService
+        - MonitoringRole
+    CTPDataServiceCheckScaleOutPolicy:
+      Type: AWS::ApplicationAutoScaling::ScalingPolicy
+      Properties:
+        PolicyName: CTPDataServiceCheckScaleOutPolicy
+        PolicyType: StepScaling
+        ScalingTargetId: 
+          Ref: CTPDataServiceCheckScalingTarget
+        StepScalingPolicyConfiguration:
+          AdjustmentType: ChangeInCapacity
+          Cooldown: 60
+          MetricAggregationType: Average
+          StepAdjustments:
+            - ScalingAdjustment: 1
+              MetricIntervalLowerBound: 0
+      DependsOn: CTPDataServiceCheckScalingTarget
+functions:
+  ctp-diagnostic-synchroniser:
+    handler: diagnostic-synchroniser/synchroniser-handler.handler
+    role: MonitoringRole
+    timeout: 900
+    events:
+      - schedule:
+          rate: rate(2 hours)
+          name: ctp-diagnostic-synchroniser-event
+          description: this process synchronises the last updated diagnostic to vehicle
