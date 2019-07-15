@@ -1,12 +1,11 @@
-# in order to create an auto scaled ecs and task definition, the following resources needs to be created (in order):
+# in order to create an autoscaled ecs fargate launch type with scheduled time, the following resources needs to be created (in order):
 # ecr as docker image (manual)
-# push docker to ecr and get the image ready to go
 # event rule: -- when does the autoscale happens
 # ecs cluster
 # ecs task definition (need ecr)
-# ecs service (depends: ecs task definition)
+# ecs service (depends: ecs task definition, ecs cluster)
 # autoscale target(depends: ecs service)
-# autoscale policy(depends: ecs service, target)
+# autoscale policy(depends: target)
 # alarm based on the event: -- a bridge to trigger autoscale (depends: autoscale policy, ecs service)
 
 
