@@ -25,7 +25,7 @@ while I have tried to use different approaches of cicd to manage the pipeline, f
 3. CDK
 
 For the CDK, there are three ways to do it:
-      | Description | Does this work? | How to validate | Pros | Cons
+a table | Description | Does this work? | How to validate | Pros | Cons
 ----- | ----------- | --------------- | --------------- | ---- | ----
 CDK   | `new EcsTask` to create the autoscaling task target, attch it to a scheduled `Rule` | Yes | should have a rule created in cloudwatch, ecs cluster should be attached with this rule in the `autoscale` tab. | simple, efficient | not strateforward to validate.
 CDK   | use service's `autoScaleTaskCount` return a task auto scale object, use `scaleOnSchedule` | No | | might be working for other types of scale | seems simple but does not work.
