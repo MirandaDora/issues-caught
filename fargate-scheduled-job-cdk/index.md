@@ -31,9 +31,9 @@ CDK   | `new EcsTask` to create the autoscaling task target, attch it to a sched
 CDK   | use service's `autoScaleTaskCount` return a task auto scale object, use `scaleOnSchedule` | No | | might be working for other types of scale | seems simple but does not work.
 CDK   | use pure auto scale with event and alarm | Yes | validate if the alarm is triggering, and the ecs task should be scaled up | better control over the trigger point | more resource to be defined and created
 
-First Header | Second Header
+First Header | Description
 ------------ | -------------
-Content from cell 1 | Content from cell 2
-Content in the first column | Content in the second column
+CDK | `new EcsTask` to create the autoscaling task target, attch it to a scheduled `Rule`
+CDK | use service's `autoScaleTaskCount` return a task auto scale object, use `scaleOnSchedule`
 
 Will explore more on this part -- to find the best approach for a balance point of customization and simplicity.
